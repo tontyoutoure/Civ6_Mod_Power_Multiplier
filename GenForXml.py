@@ -7,10 +7,12 @@ import glob
 import math
 import Database
 
-class xml_parser():
+
+
+class power_multiplier():
     __kind_type_dict = {}
     __table_column_dict = {}
-    __xml_tree_list = []
+    # __xml_tree_list = []
     __sql_file_line_list = []
     __sql_slot_line_list = []
     __sql_grant_unit_line_list = []
@@ -20,62 +22,85 @@ class xml_parser():
     __government_slot_modifier_dict = {}
     
     def __init__(self, path, multiplier = 10, change_great_work_slots = False,
-                 grant_unit = True, single_file = False):
+                 grant_unit = True, single_file = False, civ_6_database_path = None):
         if os.path.exists("output") == False:
             os.mkdir("output", )
-        self.__prefix = "output/"+os.path.basename(os.path.normpath(path))+"_x"+str(multiplier)
+
+        self.__output_prefix = "output/"+os.path.basename(os.path.normpath(path))+"_x"+str(multiplier)
 
         self.__grant_unit = grant_unit
         self.__path = path
         self.__change_great_work_slots = change_great_work_slots # it may crush the game
         self.__single_file = single_file
 
-        for filename in glob.glob(os.path.join(path, '**/*.xml')):
-            tree = ET.parse(filename)
-            self.__xml_tree_list.append(tree)
-        self.__multiplier = multiplier
-            
-        for filename in glob.glob(os.path.join(path, '*.xml')):
-            tree = ET.parse(filename)
-            self.__xml_tree_list.append(tree)
-        print (f"{len(self.__xml_tree_list)} xml files loaded")
-        self.__database_parser = Database.Civ6DatabaseParser()
+        self.__mod_database_reader = Database.ModDatabaseReader(path)
+        self.__civ6_database_reader = Database.Civ6DatabaseReader(civ_6_database_path)
 
 
-    
+    # actually from a database    
     def GenRowList(self, table_name):
-        output = []
-        for tree in self.__xml_tree_list:
-            alltables = tree.findall(table_name)
-            if len(alltables) > 0:
-                for tagnode in alltables:
-                    tagnode_row_list = tagnode.findall("Row")
-                    output+=tagnode_row_list
-        return output
+        return self.__mod_database_reader.get_all_in_table(table_name)
 
     def GetRowKeys(self, row):
-        output = []
-        if len(row.keys()) > 0:
-            return row.keys()
-        else:
-            for key in row.iter():
-                if key.tag != "Row":
-                    output.append(key.tag)
-            return output
-
-    def GetRowkvs(self, row, initial = {}):
-        output = initial
-        for key in self.GetRowKeys(row):
-            if not key in output:
-                output[key] = []
-            output[key].append(self.GetRowValue(row, key))
-        return output
+        return row.keys()
 
     def GetRowValue(self, row, name):
-        if row.find(name) != None:
-            return row.find(name).text
-        else:
-            return row.get(name)
+        return row["name"]
+    
+    def GenerateAll(self):
+        self.GenForGovernmentSlotModifier()
+        self.GenAllCombatModifier()
+        self.GenGrantUnitModifier()
+        self.GenAmountChangeForAllOtherModifiers() # may cause error, need to check
+        self.GenForBuildings()
+        self.GenForDistricts()
+        self.GenForImprovements()
+        self.GenForUnits()
+        self.WriteAll()
+
+    def GenForGovernmentSlotModifier(self):
+        gov_slot_m_dict = {}
+        for row in self.GenRowList("Modifiers"):
+            if self.GetRowValue(row,"ModifierType").find("GOVERNMENT_SLOT") >= 0:
+                mid = self.GetRowValue(row,"ModifierId")
+                gov_slot_m_dict[mid]={"info":{}}
+                for key in self.GetRowKeys(row):
+                    gov_slot_m_dict[mid]["info"][key] = self.GetRowValue(row,key)
+
+        for row in self.GenRowList("ModifierArguments"):
+            mid = self.GetRowValue(row,"ModifierId")
+            if mid in gov_slot_m_dict:
+                gov_slot_m_dict[mid][self.GetRowValue(row,"Name")] = self.GetRowValue(row,"Value")
+                
+        # begin to generate sql
+        for mid in gov_slot_m_dict:
+            d = gov_slot_m_dict[mid]
+            ll = self.__sql_slot_line_list
+            self.AddGovSlotInjector(gov_slot_m_dict, mid)
+
+            self.AddGovSlotModifierInfo(gov_slot_m_dict, mid)
+
+            ll.append(f"INSERT INTO ModifierArguments (ModifierId, Name, Value)\nVALUES\n")
+            if d["info"]['ModifierType'] == "MODIFIER_PLAYER_CULTURE_REPLACE_GOVERNMENT_SLOTS":
+                for i in range(self.__multiplier-2):
+                    if "AddedGovernmentSlotType" in d:
+                        ll.append(f"('{mid}_{i+1}', 'AddedGovernmentSlotType', '{d['AddedGovernmentSlotType']}'),\n")
+                    if "ReplacesAll" in d:
+                        ll.append(f"('{mid}_{i+1}', 'ReplacesAll', '{d['ReplacesAll']}'),\n")
+                    ll.append(f"('{mid}_{i+1}', 'ReplacedGovernmentSlotType', '{d['ReplacedGovernmentSlotType']}'),\n")
+                
+                if "AddedGovernmentSlotType" in d:
+                    ll.append(f"('{mid}_{self.__multiplier-1}', 'AddedGovernmentSlotType', '{d['AddedGovernmentSlotType']}'),\n")
+                if "ReplacesAll" in d:
+                    ll.append(f"('{mid}_{self.__multiplier-1}', 'ReplacesAll', '{d['ReplacesAll']}'),\n")
+                ll.append(f"('{mid}_{self.__multiplier-1}', 'ReplacedGovernmentSlotType', '{d['ReplacedGovernmentSlotType']}');\n\n")
+            
+            else:
+                for i in range(self.__multiplier-2):
+                    ll.append(f"('{mid}_{i+1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}'),\n")
+                ll.append(f"('{mid}_{self.__multiplier-1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}');\n\n")
+
+
         
     # def PrintAll(self):
     #     print(self.__table_column_dict)
@@ -144,21 +169,21 @@ class xml_parser():
 
     def GetGovSlotInjector(self, mid):#injector is not TraitType
         injector = {}
-        for tree in self.__xml_tree_list:
-            root = tree.getroot()
-            for tab in root:
-                if tab.tag in ["Modifiers", "ModifierArguments", "ModifierStrings"]:
-                    continue
-                rl = tab.findall("Row")
-                for row in rl:
-                    if self.GetRowValue(row, "ModifierId") == mid:
-                        if not tab.tag in injector:
-                            injector[tab.tag] = {}
-                            
-                        for key in self.GetRowKeys(row):
-                            if not key in injector[tab.tag]:
-                                injector[tab.tag][key] = []
-                            injector[tab.tag][key].append(self.GetRowValue(row, key))
+        row_lists = {}
+        row_lists["Modifiers"] = self.GenRowList("Modifiers")
+        row_lists["ModifierArguments"] = self.GenRowList("ModifierArguments")
+        row_lists["ModifierStrings"] = self.GenRowList("ModifierStrings")
+
+        for rl in row_lists:
+            for row in row_lists[rl]:
+                if self.GetRowValue(row, "ModifierId") == mid:
+                    if not rl in injector:
+                        injector[rl] = {}
+                    for key in self.GetRowKeys(row):
+                        if not key in injector[rl]:
+                            injector[rl][key] = []
+                        injector[rl][key].append(self.GetRowValue(row, key))
+
         return injector
 
     def AddGovSlotInjector(self, gov_slot_m_dict, mid):
@@ -191,47 +216,6 @@ class xml_parser():
                     value_list.append(d[key])
             ll.append(self.GenerateIndertLine(value_list, i == self.__multiplier-2))
         
-    def GenForGovernmentSlotModifier(self):
-        gov_slot_m_dict = {}
-        for row in self.GenRowList("Modifiers"):
-            if self.GetRowValue(row,"ModifierType").find("GOVERNMENT_SLOT") >= 0:
-                mid = self.GetRowValue(row,"ModifierId")
-                gov_slot_m_dict[mid]={"info":{}}
-                for key in self.GetRowKeys(row):
-                    gov_slot_m_dict[mid]["info"][key] = self.GetRowValue(row,key)
-
-        for row in self.GenRowList("ModifierArguments"):
-            mid = self.GetRowValue(row,"ModifierId")
-            if mid in gov_slot_m_dict:
-                gov_slot_m_dict[mid][self.GetRowValue(row,"Name")] = self.GetRowValue(row,"Value")
-                
-        # begin to generate sql
-        for mid in gov_slot_m_dict:
-            d = gov_slot_m_dict[mid]
-            ll = self.__sql_slot_line_list
-            self.AddGovSlotInjector(gov_slot_m_dict, mid)
-
-            self.AddGovSlotModifierInfo(gov_slot_m_dict, mid)
-
-            ll.append(f"INSERT INTO ModifierArguments (ModifierId, Name, Value)\nVALUES\n")
-            if d["info"]['ModifierType'] == "MODIFIER_PLAYER_CULTURE_REPLACE_GOVERNMENT_SLOTS":
-                for i in range(self.__multiplier-2):
-                    if "AddedGovernmentSlotType" in d:
-                        ll.append(f"('{mid}_{i+1}', 'AddedGovernmentSlotType', '{d['AddedGovernmentSlotType']}'),\n")
-                    if "ReplacesAll" in d:
-                        ll.append(f"('{mid}_{i+1}', 'ReplacesAll', '{d['ReplacesAll']}'),\n")
-                    ll.append(f"('{mid}_{i+1}', 'ReplacedGovernmentSlotType', '{d['ReplacedGovernmentSlotType']}'),\n")
-                
-                if "AddedGovernmentSlotType" in d:
-                    ll.append(f"('{mid}_{self.__multiplier-1}', 'AddedGovernmentSlotType', '{d['AddedGovernmentSlotType']}'),\n")
-                if "ReplacesAll" in d:
-                    ll.append(f"('{mid}_{self.__multiplier-1}', 'ReplacesAll', '{d['ReplacesAll']}'),\n")
-                ll.append(f"('{mid}_{self.__multiplier-1}', 'ReplacedGovernmentSlotType', '{d['ReplacedGovernmentSlotType']}');\n\n")
-            
-            else:
-                for i in range(self.__multiplier-2):
-                    ll.append(f"('{mid}_{i+1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}'),\n")
-                ll.append(f"('{mid}_{self.__multiplier-1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}');\n\n")
 
 
 
@@ -326,41 +310,30 @@ class xml_parser():
         if self.__single_file:
             self.__sql_file_line_list += self.__sql_slot_line_list
             self.__sql_file_line_list += self.__sql_grant_unit_line_list
-            with open(self.__prefix+".sql", "w") as f:
+            with open(self.__output_prefix+".sql", "w") as f:
                 f.writelines(self.__sql_file_line_list)
-            print("<file>"+self.__prefix+".sql"+"<file>")
+            print("<file>"+self.__output_prefix+".sql"+"<file>")
 
         else:    
             if len(self.__sql_slot_line_list) > 0:
-                with open(self.__prefix+"_gslot.sql", "w") as f:
+                with open(self.__output_prefix+"_gslot.sql", "w") as f:
                     f.writelines(self.__sql_slot_line_list)
-                print("<file>"+self.__prefix+"_gslot.sql"+"<file>")
+                print("<file>"+self.__output_prefix+"_gslot.sql"+"<file>")
 
-            with open(self.__prefix+".sql", "w") as f:
+            with open(self.__output_prefix+".sql", "w") as f:
                 f.writelines(self.__sql_file_line_list)
-            print("<file>"+self.__prefix+".sql"+"<file>")
+            print("<file>"+self.__output_prefix+".sql"+"<file>")
 
             if self.__grant_unit:
-                with open(self.__prefix+"_grant_unit.sql", "w") as f:
+                with open(self.__output_prefix+"_grant_unit.sql", "w") as f:
                     f.writelines(self.__sql_grant_unit_line_list)
-                print("<file>"+self.__prefix+"_grant_unit.sql"+"<file>")
+                print("<file>"+self.__output_prefix+"_grant_unit.sql"+"<file>")
 
-    def ParseAll(self):
-        self.GenForGovernmentSlotModifier()
-
-        self.GenAllCombatModifier()
-        self.GenGrantUnitModifier()
-        self.GenAmountChangeForAllOtherModifiers() # may cause error, need to check
-        self.GenForBuildings()
-        self.GenForDistricts()
-        self.GenForImprovements()
-        self.GenForUnits()
-        self.WriteAll()
 
     def GenForAdjacent(self, adj, oriadj):
         ll = self.__sql_file_line_list
-        kv_adj = self.__database_parser.get_kv("Adjacency_YieldChanges", "ID", adj)
-        kv_oriadj = self.__database_parser.get_kv("Adjacency_YieldChanges", "ID", oriadj)
+        kv_adj = self.__civ6_database_reader.get_kv("Adjacency_YieldChanges", "ID", adj)
+        kv_oriadj = self.__civ6_database_reader.get_kv("Adjacency_YieldChanges", "ID", oriadj)
         checklist = ["YieldType", "OtherDistrictAdjacent", "AdjacentTerrain", "AdjacentFeature",
                      "AdjacentRiver", "AdjacentWonder","AdjacentResource","AdjacentNaturalWonder",
                      "AdjacentImprovement","AdjacentDistrict","PrereqCivic","PrereqTech"]
@@ -407,11 +380,11 @@ class xml_parser():
             distr = districts[dis]
             if "adj" not in distr:
                 continue
-            if "ReplacesDistrictType" not in distr or self.__database_parser.is_in("District_Adjacencies", "DistrictType", distr["ReplacesDistrictType"]) == False:
+            if "ReplacesDistrictType" not in distr or self.__civ6_database_reader.is_in("District_Adjacencies", "DistrictType", distr["ReplacesDistrictType"]) == False:
                 for adj in distr["adj"]:
                     ll.append(f"UPDATE District_Adjacencies\nSET YieldChange = YieldChange * {self.__multiplier}\nWHERE ID = '{adj}';\n\n")
             else:
-                distr["oriadj"] = self.__database_parser.get_column("District_Adjacencies", {"DistrictType": distr["ReplacesDistrictType"]}, "YieldChangeId")
+                distr["oriadj"] = self.__civ6_database_reader.get_column("District_Adjacencies", {"DistrictType": distr["ReplacesDistrictType"]}, "YieldChangeId")
                 for adjid in distr["adj"]:
                     if adjid in distr["oriadj"]:
                         distr["adj"].remove(adjid)
@@ -462,7 +435,7 @@ class xml_parser():
             ori_info = {}
             for key in self.GetRowKeys(row):
                 if len(replace_object_type) > 0:
-                    ori_info[key] = self.__database_parser.get_data(capital_t+"s", {capital_t+"Type": replace_object_type}, key)
+                    ori_info[key] = self.__civ6_database_reader.get_data(capital_t+"s", {capital_t+"Type": replace_object_type}, key)
                 else:
                     ori_info[key] = 0
             
@@ -542,7 +515,7 @@ class xml_parser():
         if type_value == "":
             return 0
         else:
-            output = self.__database_parser.get_data(table_name, {type_key:type_value, gain_type_key:gain_type_value}, gain_point_key)
+            output = self.__civ6_database_reader.get_data(table_name, {type_key:type_value, gain_type_key:gain_type_value}, gain_point_key)
             if output == None:
                 return 0
             return output
@@ -574,19 +547,10 @@ class xml_parser():
                 self.GenerateMultipleUpdate(table_name, update_kv, {type_key:type_value, gain_type_key:gain_type_value})
 
 
-    def GenForAllTraitModifier(self):
-        self.GetAllTableColumn("TraitModifiers", "ModifierId")
-        self.GetAllTableColumn("AgendaTraits", "TraitType") 
-        self.RemoveAllAgendaTrait()
 
-        for tree in self.__xml_tree_list:
-            if tree.find("ModifierArguments") != None:
-                pass
 
 if __name__ == '__main__':
     # InitDatabase()
     # get_data()
-    #D:\SteamLibrary\steamapps\workshop\content\289070\3003039611
-    parser = xml_parser("D:\\SteamLibrary\\steamapps\\workshop\\content\\289070\\2048816113\\")
-    parser.ParseAll()
+    # parser = ("D:\\SteamLibrary\\steamapps\\workshop\\content\\289070\\2048816113\\")
     # parser.PrintAll()
