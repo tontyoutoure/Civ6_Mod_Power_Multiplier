@@ -340,9 +340,9 @@ class ModDatabaseReader(DataBaseReader):
                         v = row.get(key)
                         if key == "Type":
                             type_hash = hash(v) % 0x100000000-0x80000000
-                    if v == "true" or v == "True":
+                    if v == "true" or v == "True" or v == "TRUE":
                         v = 1
-                    elif v == "false" or v == "False":
+                    elif v == "false" or v == "False" or v == "FALSE":
                         v = 0
                     sql_line += "'"+str(v)+"',"
                 if child.tag == "Types": # Hash is unique and not null

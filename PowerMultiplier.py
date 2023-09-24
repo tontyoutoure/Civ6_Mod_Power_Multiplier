@@ -5,9 +5,11 @@ import xml
 import xml.etree.ElementTree as ET
 import glob
 import math
+import argparse
 import Database
 
 class database_read():
+    # base class to read original database
     def __init__(self, database):
         self.__database_self = database
 
@@ -22,6 +24,7 @@ class database_read():
 
 
 class object_generator(database_read):
+    #not ready yet.
     def __init__(self, object_kind_name, object_type_list, database_self, database_original, multiplier = 10):
         self.__object_kind_name = object_kind_name
         self.__object_type_list = object_type_list
@@ -33,8 +36,114 @@ class object_generator(database_read):
         
         database_read.__init__(self, database_self)
 
+    def GetReplaceTypes(self, type_name):
+        # get what this original object it replaces
+        capital_t = type_name[0].upper() + type_name[1:]
+        
+        objects = {}
+        for row in self.GenRowList(capital_t+"s"):
+            objects[self.GetRowValue(row, capital_t+"Type")] = {}
+
+        if type_name == "improvement":
+            return objects
+        for row in self.GenRowList(capital_t+"Replaces"):
+            if self.GetRowValue(row,"CivUnique"+capital_t+"Type") in objects:
+                objects[self.GetRowValue(row,"CivUnique"+capital_t+"Type")]["Replaces"+capital_t+"Type"] = self.GetRowValue(row,"Replaces"+capital_t+"Type")
+        return objects
+    
+    def CalculateAttack(self, attack):
+        symbol = attack/abs(attack)
+        attack = abs(attack)
+        value = 25* math.log( self.__multiplier * math.exp( attack / 25) - (self.__multiplier-1) )
+        return int(symbol * round( value ))
+    
+        
+    def GenerateMultipleUpdate(self, table_name, set_dict, where_dict):
+        output = ( f"UPDATE {table_name}\nSET ")
+        for key in set_dict:
+            output += f"{key} = "
+            if type(set_dict[key]) == str:
+                output += f"'{set_dict[key]}', "
+            else:
+                output += f"{set_dict[key]}, "
+        output = output[:-2]+"\nWHERE "
+        for key in where_dict:
+            output += f"{key} = "
+            if type(where_dict[key]) == str:
+                output += f"'{where_dict[key]}' AND "
+            else:
+                output += f"{where_dict[key]} AND "
+        output = output[:-5]+";\n\n"
+        self.__output_lines.append(output)
+    
+
+    # def gen_for_object_type(self, type_name, properties_list, gain_dict):
+        
+    #     capital_t = type_name[0].upper() + type_name[1:]
+
+    #     ll = self.__output_lines
+    #     if len(self.GenRowList(capital_t+"s")) >0:
+    #         ll.append(f"\n\n-- {capital_t} infos\n")
+    #     objects = self.GetReplaceTypes(type_name)
+    #     strenth_keys = ["Combat", "BaseCombat", "RangedCombat", "AntiAirCombat", "ReligiousStrength", 
+    #                     "Bombard", "OuterDefenseStrength", "DefenseModifier", "CityStrengthModifier"]
+
+    #     for row in self.GenRowList(capital_t+"s"): # iterate over objects
+    #         object_type = self.GetRowValue(row,capital_t+"Type")
+    #         if "Replaces"+capital_t+"Type" in objects[object_type]:
+    #             replace_object_type = objects[object_type]["Replaces"+capital_t+"Type"]
+    #         else:
+    #             replace_object_type = ""
+    #         objects[object_type]["info"] = {}
+    #         ori_info = {}
+    #         for key in self.GetRowKeys(row):
+    #             if len(replace_object_type) > 0:
+    #                 ori_info[key] = self.__database_original.get_data(capital_t+"s", {capital_t+"Type": replace_object_type}, key)
+    #                 if ori_info[key] == None:
+    #                     ori_info[key] = 0
+    #             else:
+    #                 ori_info[key] = 0
+            
+    #         updated_info = {}
+    #         for key in self.GetRowKeys(row):
+    #             value = self.GetRowValue(row,key)
+    #             if key == "Cost" or key == "Maintenance" or key == "CostProgressionParam1":
+    #                 if len(replace_object_type) > 0:
+    #                     if float(value) >= float(ori_info[key]) or int(value) == 0:
+    #                         continue
+    #                     else:
+    #                         value = float(ori_info[key])/(float(ori_info[key])/float(value))**self.__multiplier
+    #                         value = int(round(value))
+    #                 else:
+    #                     value = int(round((float(value)/self.__multiplier)))
+
+    #             if key in properties_list:
+    #                 if key in strenth_keys:
+    #                     if int(value) <= int(ori_info[key]):
+    #                         continue
+    #                     else:
+    #                         value = int(ori_info[key]) + self.CalculateAttack(int(value) - int(ori_info[key]))
+    #                         value = min(value, value+self.CalculateAttack(10))
+    #                 else:
+    #                     if value == None or int(value) <= int(ori_info[key]):
+    #                         continue
+    #                     else:
+    #                         value = int(ori_info[key]) + (int(value) - int(ori_info[key])) * self.__multiplier
+
+
+    #             if value != self.GetRowValue(row,key) and int(value) != int(self.GetRowValue(row,key)):
+    #                 updated_info[key] = value
+    #             objects[object_type]["info"][key] = value
+    #         self.GenerateMultipleUpdate(capital_t+"s", updated_info, {capital_t+"Type": object_type})
+
+    #         for k in gain_dict:
+    #             if k == "_GreatWorks" and self.__change_great_work_slots == False:
+    #                 continue
+    #             self.GenGainForTable(capital_t+k, capital_t+"Type", object_type, replace_object_type, gain_dict[k])
 
 class modifier_generator(database_read):
+    # usable ,give a modifier list and it will generate sql lines for ya.
+    # not working now for those modifiers need to be duplicated
     def __init__(self, modifier_id_list, database, multiplier = 10):
         self.__modifier_id_list = modifier_id_list
         self.__database = database
@@ -294,11 +403,11 @@ class mod_power_multiplier(database_read):
     
     
     def __init__(self, path, multiplier = 10, change_great_work_slots = False,
-                 grant_unit = True, single_file = False, civ_6_database_path = None):
+                 grant_unit = False, single_file = True, civ_6_database_path = None):
         if os.path.exists("output") == False:
             os.mkdir("output", )
         self.__multiplier = multiplier
-        self.__output_prefix = os.path.join(path,os.path.basename(os.path.normpath(path))+"_x"+str(multiplier))
+        self.__output_prefix = os.path.join("output",os.path.basename(os.path.normpath(path))+"_x"+str(multiplier))
 
         self.__grant_unit = grant_unit
         self.__path = path
@@ -382,12 +491,12 @@ class mod_power_multiplier(database_read):
         loadorders = self.__mod_database_reader.GetModLoadOrder()
         max_loadorder = max(loadorders)
         
-        print("generation done, plz add these lines into mod's .modinfo file:\n")
+        print("generation done, plz add these lines into traits power mod's .modinfo file:\n")
 
-        print(4*" "+f"<UpdateDatabase id=\"{basename}\">")
-        print(6*" "+f"<Properties>")
-        print(8*" "+f"<LoadOrder>{max_loadorder+1}</LoadOrder>")
-        print(6*" "+f"</Properties>")
+        # print(4*" "+f"<UpdateDatabase id=\"{basename}\">")
+        # print(6*" "+f"<Properties>")
+        # print(8*" "+f"<LoadOrder>{max_loadorder+1}</LoadOrder>")
+        # print(6*" "+f"</Properties>")
         
         if self.__single_file:
             self.__sql_file_line_list += self.__sql_slot_line_list
@@ -410,7 +519,7 @@ class mod_power_multiplier(database_read):
                 with open(self.__output_prefix+"_grant_unit.sql", "w") as f:
                     f.writelines(self.__sql_grant_unit_line_list)
                 print(6*" "+"<File>"+basename+"_grant_unit.sql"+"</File>")
-        print(4*" "+f"</UpdateDatabase>")
+        # print(4*" "+f"</UpdateDatabase>")
 
     def GenForAdjacent(self, adj, oriadj):
         ll = self.__sql_file_line_list
@@ -424,7 +533,7 @@ class mod_power_multiplier(database_read):
         for key in checklist:
             output = output and( kv_adj[key]!= None and kv_adj[key] == kv_oriadj[key])
         
-        if output == True:
+        if output:
             c1 = int(kv_oriadj["YieldChange"])
             c2 = int(kv_adj["YieldChange"])
             t1 = int(kv_oriadj["TilesRequired"])
@@ -432,15 +541,15 @@ class mod_power_multiplier(database_read):
             if t1 == t2:
                 if c2 > c1:
                     change = int(c1 + (c2-c1)*self.__multiplier)
-                    ll.append(f"UPDATE District_Adjacencies\nSET YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
+                    ll.append(f"UPDATE Adjacency_YieldChanges\nSET YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
             elif t2 < t1 and float(c2)/(t2) > float(c1)/(t1):
                 change = (c2 * t1/t2 - c1)*self.__multiplier + c1
-                ll.append(f"UPDATE District_Adjacencies\nSET TilesRequired = {t1}, YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
+                ll.append(f"UPDATE Adjacency_YieldChanges\nSET TilesRequired = {t1}, YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
             elif  float(c2)/(t2) > float(c1)/(t1):
                 change = (c2 - c1*t2/t1)*self.__multiplier + c1*t2/t1
-                ll.append(f"UPDATE District_Adjacencies\nSET YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
+                ll.append(f"UPDATE Adjacency_YieldChanges\nSET YieldChange = {change}\nWHERE ID = '{adj}';\n\n")
                  
-        return output
+        return output # true if similar original adjency is found
         
     def GenForDistricts(self):
         district_other_properties = ["HitPoints","Appeal", "Housing", "Entertainment", 
@@ -450,21 +559,21 @@ class mod_power_multiplier(database_read):
         self.GenForObjectType("district", district_other_properties, gain_dict)
 
         districts = self.GetReplaceTypes("district")
-        for dis in districts:
-            districts[dis]["adj"] = []
+        for distr in districts.items():
+            distr["adj"] = []
                 
         ll = self.__sql_file_line_list
         for row in self.GenRowList("District_Adjacencies"):
             if self.GetRowValue(row,"DistrictType") in districts:
                 districts[self.GetRowValue(row,"DistrictType")]["adj"].append(self.GetRowValue(row,"YieldChangeId"))
 
-        for dis in districts:
-            distr = districts[dis]
+        for distr in districts.items():
+            # distr = districts[dis]
             if "adj" not in distr:
                 continue
-            if "ReplacesDistrictType" not in distr or self.__civ6_database_reader.is_in("District_Adjacencies", "DistrictType", distr["ReplacesDistrictType"]) == False:
+            if "ReplacesDistrictType" not in distr or not self.__civ6_database_reader.is_in("District_Adjacencies", "DistrictType", distr["ReplacesDistrictType"]):
                 for adj in distr["adj"]:
-                    ll.append(f"UPDATE District_Adjacencies\nSET YieldChange = YieldChange * {self.__multiplier}\nWHERE ID = '{adj}';\n\n")
+                    ll.append(f"UPDATE Adjacency_YieldChanges\nSET YieldChange = YieldChange * {self.__multiplier}\nWHERE ID = '{adj}';\n\n")
             else:
                 distr["oriadj"] = self.__civ6_database_reader.get_column("District_Adjacencies", {"DistrictType": distr["ReplacesDistrictType"]}, "YieldChangeId")
                 for adjid in distr["adj"]:
@@ -472,13 +581,14 @@ class mod_power_multiplier(database_read):
                         distr["adj"].remove(adjid)
                 for adj in distr["adj"]:
                     for oriadj in distr["oriadj"]:
-                        handled = self.GenForAdjacent(adj, oriadj)
+                        handled = self.GenForAdjacent(adj, oriadj) # original adjency is found and handled
                         if handled:
                             break
                     if not handled:
-                        ll.append(f"UPDATE District_Adjacencies\nSET YieldChange = YieldChange * {self.__multiplier}\nWHERE ID = '{adj}';\n\n")
+                        ll.append(f"UPDATE Adjacency_YieldChanges\nSET YieldChange = YieldChange * {self.__multiplier}\nWHERE ID = '{adj}';\n\n")
 
     def GetReplaceTypes(self, type_name):
+        # get what this original object it replaces
         capital_t = type_name[0].upper() + type_name[1:]
         
         objects = self.GetAllTypes(capital_t+"s")
@@ -639,6 +749,9 @@ class mod_power_multiplier(database_read):
 
 
 class power_multiplier_original(database_read):
+    # only implement for pantheons
+
+
     def __init__(self, multiplier = 10):
         self.__civ6_database_reader = Database.Civ6DatabaseReader()
         self.__multiplier = multiplier
@@ -678,12 +791,25 @@ class power_multiplier_original(database_read):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path", help="path to mod folder, end with the steam workshop id")
+    parser.add_argument("multiplier", help="multiplier for power", type=int)
+    parser.add_argument('--disable-grant-unit' , help="not giving extra units", required=False, action="store_true")
+    parser.add_argument('--disable-grant-gw-slot' , help="not giving extra great work slots", required=False, action="store_true")
+    # parser.add_argument('-d','--duplcate-modifier-list',nargs='+', required=False ,  help="some modifiers need to be dupilicate to work\n since there is no numerical argument to change.", action="store")
+
+    args = parser.parse_args()
+    print(args.multiplier)
+
+
     # InitDatabase()
     # get_data()
-    path = sys.argv[1]
-    multiplier = int(sys.argv[2])
-    generator = mod_power_multiplier("D:\\SteamLibrary\\steamapps\\workshop\\content\\289070\\3017462977\\", multiplier=multiplier)
+    
+
+    generator = mod_power_multiplier(args.path, multiplier=args.multiplier, 
+                                     grant_unit=(not args.disable_grant_unit), change_great_work_slots = (not args.disable_grant_gw_slot))
     generator.GenerateAll()
+
     # original_generator = power_multiplier_original(multiplier=multiplier)
     # original_generator.GenForPantheons()
     # parser.PrintAll()
