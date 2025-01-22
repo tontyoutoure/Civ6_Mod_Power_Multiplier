@@ -270,6 +270,7 @@ class modifier_generator(database_read):
         row_lists["Modifiers"] = self.GenRowList("Modifiers")
         row_lists["ModifierArguments"] = self.GenRowList("ModifierArguments")
         row_lists["ModifierStrings"] = self.GenRowList("ModifierStrings")
+        row_lists["TraitModifiers"] = self.GenRowList("TraitModifiers")
 
         for rl in row_lists:
             for row in row_lists[rl]:
@@ -288,6 +289,8 @@ class modifier_generator(database_read):
         for value in value_list:
             if type(value) == str:
                 output += f"'{value}', "
+            elif value == None:
+                output += "NULL, "
             else:
                 output += f"{value}, "
         output = output[:-2]+")"
@@ -304,23 +307,28 @@ class modifier_generator(database_read):
         output = output[:-2]+")\nVALUES\n"
         return output
     
-    def AddGovSlotInjector(self, gov_slot_m_dict, mid):
-        d = gov_slot_m_dict[mid]
+    def gen_for_gov_table(self, injector, tab, mid):        
         ll = self.__sql_gov_slot_line_list
+        tab_keys = injector[tab].keys()
+        ll.append(self.GenerateInsertHead(tab, tab_keys))
+        for inj_idx in range(len(injector[tab]["ModifierId"])):
+            for i_multi in range(self.__multiplier-1):
+                value_list = []
+                for key in tab_keys:
+                    if key == "ModifierId":
+                        value_list.append(f"{mid}_{i_multi+1}")
+                    else:
+                        value_list.append(injector[tab][key][inj_idx])
+                ll.append(self.GenerateIndertLine(value_list, i_multi == self.__multiplier-2 and inj_idx == len(injector[tab]["ModifierId"])-1))
+
+
+    def AddGovSlotInjector(self, gov_slot_m_dict, mid):
         injector = self.GetGovSlotInjector(mid)
-        for tab in injector:
-            tab_keys = injector[tab].keys()
-            ll.append(self.GenerateInsertHead(tab, tab_keys))
-            for inj_idx in range(len(injector[tab]["ModifierId"])):
-                for i_multi in range(self.__multiplier-1):
-                    value_list = []
-                    for key in tab_keys:
-                        if key == "ModifierId":
-                            value_list.append(f"{mid}_{i_multi+1}")
-                        else:
-                            value_list.append(injector[tab][key][inj_idx])
-                    ll.append(self.GenerateIndertLine(value_list, i_multi == self.__multiplier-2 and inj_idx == len(injector[tab]["ModifierId"])-1))
-    
+        tabs = ["Modifiers", "ModifierArguments", "TraitModifiers"]
+        for tab in tabs:
+            self.gen_for_gov_table(injector, tab, mid)
+
+
     def AddGovSlotModifierInfo(self, gov_slot_m_dict, mid):     
         d = gov_slot_m_dict[mid]["info"]
         ll = self.__sql_gov_slot_line_list        
@@ -347,18 +355,17 @@ class modifier_generator(database_read):
         for row in self.GenRowList("ModifierArguments"):
             mid = row["ModifierId"]
             if mid in gov_slot_m_dict:
-                gov_slot_m_dict[mid][row["Name"]] = ["Value"]
+                gov_slot_m_dict[mid][row["Name"]] = row["Value"]
                 
         # begin to generate sql
         for mid in gov_slot_m_dict:
             d = gov_slot_m_dict[mid]
-            ll = self.__sql_gov_slot_line_list
-            self.AddGovSlotInjector(gov_slot_m_dict, mid)
-
-            self.AddGovSlotModifierInfo(gov_slot_m_dict, mid)
-
-            ll.append(f"INSERT INTO ModifierArguments (ModifierId, Name, Value)\nVALUES\n")
             if d["info"]['ModifierType'] == "MODIFIER_PLAYER_CULTURE_REPLACE_GOVERNMENT_SLOTS":
+                ll = self.__sql_gov_slot_line_list
+
+                # self.AddGovSlotModifierInfo(gov_slot_m_dict, mid)
+
+                ll.append(f"INSERT INTO ModifierArguments (ModifierId, Name, Value)\nVALUES\n")
                 for i in range(self.__multiplier-2):
                     if "AddedGovernmentSlotType" in d:
                         ll.append(f"('{mid}_{i+1}', 'AddedGovernmentSlotType', '{d['AddedGovernmentSlotType']}'),\n")
@@ -373,9 +380,7 @@ class modifier_generator(database_read):
                 ll.append(f"('{mid}_{self.__multiplier-1}', 'ReplacedGovernmentSlotType', '{d['ReplacedGovernmentSlotType']}');\n\n")
             
             else:
-                for i in range(self.__multiplier-2):
-                    ll.append(f"('{mid}_{i+1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}'),\n")
-                ll.append(f"('{mid}_{self.__multiplier-1}', 'GovernmentSlotType', '{d['GovernmentSlotType']}');\n\n")
+                self.AddGovSlotInjector(gov_slot_m_dict, mid)
 
     def GenGrantUnitModifier(self):
         grant_unit_modifier_list = []
@@ -439,6 +444,7 @@ class mod_power_multiplier(database_read):
         self.GenForDistricts()
         self.GenForUnits()
         self.GenForImprovements()
+        self.GenForProjects()
         self.WriteAll()
 
     
@@ -503,7 +509,7 @@ class mod_power_multiplier(database_read):
             self.__sql_file_line_list += self.__sql_grant_unit_line_list
             with open(self.__output_prefix+".sql", "w") as f:
                 f.writelines(self.__sql_file_line_list)
-            print("<file>"+self.__output_prefix+".sql"+"<file>")
+            print("<File>"+self.__output_prefix+".sql"+"</File>")
 
         else:    
             if len(self.__sql_slot_line_list) > 0:
@@ -559,7 +565,7 @@ class mod_power_multiplier(database_read):
         self.GenForObjectType("district", district_other_properties, gain_dict)
 
         districts = self.GetReplaceTypes("district")
-        for distr in districts.items():
+        for distr in districts.values():
             distr["adj"] = []
                 
         ll = self.__sql_file_line_list
@@ -567,7 +573,7 @@ class mod_power_multiplier(database_read):
             if self.GetRowValue(row,"DistrictType") in districts:
                 districts[self.GetRowValue(row,"DistrictType")]["adj"].append(self.GetRowValue(row,"YieldChangeId"))
 
-        for distr in districts.items():
+        for distr in districts.values():
             # distr = districts[dis]
             if "adj" not in distr:
                 continue
@@ -592,7 +598,7 @@ class mod_power_multiplier(database_read):
         capital_t = type_name[0].upper() + type_name[1:]
         
         objects = self.GetAllTypes(capital_t+"s")
-        if type_name == "improvement":
+        if type_name == "improvement" or type_name == "project":
             return objects
         for row in self.GenRowList(capital_t+"Replaces"):
             if self.GetRowValue(row,"CivUnique"+capital_t+"Type") in objects:
@@ -605,7 +611,6 @@ class mod_power_multiplier(database_read):
                                  "SpreadCharges", "ReligiousHealCharges",  "InitialLevel",
                                  "AirSlots", "AntiAirCombat", "ParkCharges", "DisasterCharges"]
         self.GenForObjectType("unit", unit_other_properties, {})
-        pass
 
     def GenForObjectType(self, type_name, properties_list, gain_dict):
         
@@ -664,13 +669,20 @@ class mod_power_multiplier(database_read):
                 if value != self.GetRowValue(row,key) and int(value) != int(self.GetRowValue(row,key)):
                     updated_info[key] = value
                 objects[object_type]["info"][key] = value
+            if len(updated_info) == 0:
+                continue
             self.GenerateMultipleUpdate(capital_t+"s", updated_info, {capital_t+"Type": object_type})
 
             for k in gain_dict:
                 if k == "_GreatWorks" and self.__change_great_work_slots == False:
                     continue
                 self.GenGainForTable(capital_t+k, capital_t+"Type", object_type, replace_object_type, gain_dict[k])
-        
+    
+    def GenForProjects(self):
+        project_other_properties = {}
+        gain_dict = {"_GreatPersonPoints":"GreatPersonClassType","_YieldConversions":"YieldType"}
+        self.GenForObjectType("project", project_other_properties, gain_dict)
+
 
     def GenForImprovements(self):
         improvement_other_properties = ["Housing", "AirSlots", "DefenseModifier", "WeaponSlots", "ReligiousUnitHealRate"
@@ -730,7 +742,7 @@ class mod_power_multiplier(database_read):
             key_lists.remove(gain_type_key)
             update_kv = {}
             for key in key_lists:
-                if key == "Id":
+                if key == "Id" or key == "PointProgressionParam1":
                     continue
                 original_value = self.GetOriginalValue(table_name, type_key, original_type_value, gain_type_key, gain_type_value, key)
                 value = self.GetRowValue(row, key)

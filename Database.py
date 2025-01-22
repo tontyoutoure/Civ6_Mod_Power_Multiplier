@@ -107,7 +107,10 @@ class ModDatabaseReader(DataBaseReader):
 
         self.GetDataFileList(path)
 
-
+        # if os.path.exists(self.__prefix+".sqlite"):
+        #     os.remove(self.__prefix+".sqlite")
+        # self.__con = sqlite3.connect(self.__prefix+".sqlite")
+        # self.__cursor = self.__con.cursor()
         if not os.path.exists(self.__prefix+".sqlite"):
             self.__con = sqlite3.connect(self.__prefix+".sqlite")
             self.__cursor = self.__con.cursor()
@@ -121,8 +124,17 @@ class ModDatabaseReader(DataBaseReader):
 
         print("buildng mod datable, plz wait")
         self.execute_file("01_GameplaySchema.sql")
+        #print list of tables
+        self.__cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = self.__cursor.fetchall()
+        print(tables)
         self.execute_file("Expansion2_Schema.sql")
-        
+        self.__cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = self.__cursor.fetchall()
+        print(tables)
+        #write data to database
+        self.__con.commit()
+
         for file in self.__database_file_list:
             if file.endswith(".xml"):
                 self.execute_xml_file(file)
@@ -185,6 +197,22 @@ class ModDatabaseReader(DataBaseReader):
                 types_started = True
                 break
         return types_started
+    
+    def remove_statements_for_tables(self, statements):
+        output_list = []
+        for i, statement in enumerate(statements):
+            not_banned = True
+            if statement.normalized.find("SELECT DISTINCT") >= 0:
+                not_banned = False
+            if statement.normalized.find("LEFT JOIN") >= 0:
+                not_banned = False
+            if not_banned:
+                output_list.append(statement)
+            else:
+                pass
+                # print("removed statement "+statement.normalized)
+
+        return output_list
 
     def execute_file(self, file):
         print("executing "+file)
@@ -192,7 +220,10 @@ class ModDatabaseReader(DataBaseReader):
         sql = f.read()
         f.close()
 
-        parsed = sqlparse.parse(sqlparse.format(sql, strip_comments=True, strip_whitespace = True).strip())
+        parsed = list(sqlparse.parse(sqlparse.format(sql, strip_comments=True, strip_whitespace = True).strip()))
+        # print("parsed length: "+str(len(parsed)))
+        parsed = self.remove_statements_for_tables(parsed)
+        # print("parsed length after removing: "+str(len(parsed)))
         
         fixed_statements, selection = self.fix_hash_get_select(parsed)
         if len(selection) > 0:
@@ -220,8 +251,10 @@ class ModDatabaseReader(DataBaseReader):
             sql = "SELECT * FROM "+table+" WHERE "+condition
             describ, results = self.__civ6db.execute_and_fetchall(sql)
             # print(len(results[0]), len(describ))
+            if len(results) == 0:
+                continue
             for result in results:
-                sql = "INSERT INTO "+table+" ("
+                sql = "INSERT OR IGNORE INTO "+table+" ("
                 for i, des in enumerate(describ):
                     sql += des+", "
                 sql = sql[:-2]
@@ -247,7 +280,13 @@ class ModDatabaseReader(DataBaseReader):
             output = ""
             types_started = False
             has_selection = False
-            for token in statement.tokens:
+            table_name = ""
+            for i_token, token in enumerate(statement.tokens):
+                if token.normalized.find("FROM") >= 0:
+                    # print(statement.tokens[i_token+2].normalized)
+                    table_name = statement.tokens[i_token+2].normalized
+
+            for i_token, token in enumerate(statement.tokens):
                 if token.is_group and token.tokens[0].ttype == None and token.tokens[0].value == "Types":
                     # token.value = token.value.replace(")",", Hash)")
                     types_started = True
@@ -257,12 +296,9 @@ class ModDatabaseReader(DataBaseReader):
                 else:
                     output += token.normalized
 
-                if token.is_group and token.tokens[0].ttype == None:
-                    table_name = token.tokens[0].value
-
                 if token.normalized.find("SELECT") >= 0:
                     has_selection = True
-                
+
                 if has_selection and token.is_group and token.tokens[0].value == "WHERE": 
                     # print(token, type(token.tokens[2]))
                     for sub_token in token.tokens:
@@ -326,7 +362,7 @@ class ModDatabaseReader(DataBaseReader):
                         keys.append(key.tag)
             if child.tag == "Types": # Hash is unique and not null
                 keys.append("Hash")
-            sql_line = "INSERT INTO "+child.tag+" ("+",".join(keys)+") VALUES\n"
+            sql_line = "INSERT OR IGNORE INTO "+child.tag+" ("+",".join(keys)+") VALUES\n"
             if child.tag == "Types": # Hash is unique and not null
                 keys.remove("Hash")
             for row in row_list:
@@ -352,7 +388,7 @@ class ModDatabaseReader(DataBaseReader):
                 sql_line += "),\n"
             sql_line = sql_line[:-2]
             sql_line += ";"
-            print(sql_line)
+            # print(sql_line)
             cursor.execute(sql_line)
         
 

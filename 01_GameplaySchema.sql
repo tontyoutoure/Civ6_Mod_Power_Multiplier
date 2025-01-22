@@ -42,6 +42,19 @@ CREATE TABLE "Adjacency_YieldChanges" (
 		FOREIGN KEY (ObsoleteCivic) REFERENCES Civics(CivicType) ON DELETE SET NULL ON UPDATE CASCADE,
 		FOREIGN KEY (ObsoleteTech) REFERENCES Technologies(TechnologyType) ON DELETE SET NULL ON UPDATE CASCADE);
 
+CREATE TABLE "Colors" (
+	"Type" TEXT NOT NULL,
+	"Color" TEXT NOT NULL
+);
+-- INSERT INTO PlayerColors (Type,Usage,PrimaryColor,SecondaryColor,TextColor) VALUES
+CREATE TABLE "PlayerColors"(
+	"Type" TEXT NOT NULL,
+	"Usage" TEXT NOT NULL,
+	"PrimaryColor" TEXT NOT NULL,
+	"SecondaryColor" TEXT NOT NULL,
+	"TextColor" TEXT NOT NULL
+);
+
 CREATE TABLE "Adjacent_AppealYieldChanges" (
 		"DistrictType" TEXT NOT NULL,
 		"YieldType" TEXT NOT NULL,
